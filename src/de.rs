@@ -2058,6 +2058,118 @@ item x y
     }
 
     #[test]
+    fn single_node_with_children_as_seq() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Tag {
+            #[serde(rename = "#0")]
+            value: String,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Item {
+            #[serde(rename = "#0")]
+            name: String,
+            #[serde(default)]
+            tag: Vec<Tag>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            item: Vec<Item>,
+        }
+
+        let config: Config = from_str("item a { tag x; tag y }").unwrap();
+        assert_eq!(
+            config,
+            Config {
+                item: vec![Item {
+                    name: "a".into(),
+                    tag: vec![Tag { value: "x".into() }, Tag { value: "y".into() }],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn lone_property_node_as_seq() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Item {
+            #[serde(rename = "#@size")]
+            size: Option<u32>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            item: Vec<Item>,
+        }
+
+        let config: Config = from_str("item size=1").unwrap();
+        assert_eq!(
+            config,
+            Config {
+                item: vec![Item { size: Some(1) }],
+            }
+        );
+    }
+
+    #[test]
+    fn nested_single_node_as_seq() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Tag {
+            #[serde(rename = "#0")]
+            value: String,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Item {
+            #[serde(rename = "#0")]
+            name: Option<String>,
+            #[serde(default)]
+            tag: Vec<Tag>,
+            #[serde(rename = "#@size")]
+            size: Option<u32>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Outer {
+            item: Vec<Item>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            outer: Outer,
+        }
+
+        let config: Config = from_str("outer { item size=1 }").unwrap();
+        assert_eq!(
+            config,
+            Config {
+                outer: Outer {
+                    item: vec![Item {
+                        name: None,
+                        tag: vec![],
+                        size: Some(1),
+                    }],
+                },
+            }
+        );
+
+        let config: Config = from_str("outer { item a { tag x; tag y } }").unwrap();
+        assert_eq!(
+            config,
+            Config {
+                outer: Outer {
+                    item: vec![Item {
+                        name: Some("a".into()),
+                        tag: vec![Tag { value: "x".into() }, Tag { value: "y".into() }],
+                        size: None,
+                    }],
+                },
+            }
+        );
+    }
+
+    #[test]
     fn mixed_props_and_children() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Server {
