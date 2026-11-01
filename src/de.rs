@@ -590,7 +590,6 @@ impl<'de, 'a> de::Deserializer<'de> for DocumentDeserializer<'a> {
         visitor.visit_seq(NodeListSeqAccess {
             iter: self.doc.nodes().iter(),
             input: self.input,
-            first_node: None,
         })
     }
 
@@ -727,26 +726,11 @@ impl<'de, 'a> MapAccess<'de> for DocumentMapAccess<'a> {
 struct NodeDeserializer<'a> {
     node: &'a KdlNode,
     input: &'a Arc<String>,
-    first_node: Option<&'a KdlNode>,
 }
 
 impl<'a> NodeDeserializer<'a> {
     fn new(node: &'a KdlNode, input: &'a Arc<String>) -> Self {
-        NodeDeserializer {
-            node,
-            input,
-            first_node: None,
-        }
-    }
-
-    fn fallback_node(&self) -> &'a KdlNode {
-        if let Some(n) = self.first_node
-            && self.is_scalar()
-        {
-            n
-        } else {
-            self.node
-        }
+        NodeDeserializer { node, input }
     }
 
     fn args(&self) -> Vec<&'a KdlEntry> {
@@ -952,7 +936,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        visitor.visit_map(NodeMapAccess::new(self.fallback_node(), self.input, None))
+        visitor.visit_map(NodeMapAccess::new(self.node, self.input, None))
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -961,11 +945,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        visitor.visit_map(NodeMapAccess::new(
-            self.fallback_node(),
-            self.input,
-            Some(fields),
-        ))
+        visitor.visit_map(NodeMapAccess::new(self.node, self.input, Some(fields)))
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -1183,7 +1163,6 @@ impl<'de, 'a> de::Deserializer<'de> for ArgOrNodeDeserializer<'a, '_> {
 struct NodeListSeqAccess<'a> {
     iter: std::slice::Iter<'a, KdlNode>,
     input: &'a Arc<String>,
-    first_node: Option<&'a KdlNode>,
 }
 
 impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
@@ -1199,7 +1178,6 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
                 seed.deserialize(NodeDeserializer {
                     node,
                     input: self.input,
-                    first_node: self.first_node,
                 })
             })
             .transpose()
