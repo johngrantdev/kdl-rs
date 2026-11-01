@@ -1250,10 +1250,14 @@ impl<'de, 'a> de::Deserializer<'de> for EmptyOrNodeDeserializer<'a, '_> {
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(
         self,
-        name: &'static str,
+        _name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        self.node().deserialize_newtype_struct(name, visitor)
+        visitor.visit_newtype_struct(self)
+    }
+
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        visitor.visit_some(self)
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -1284,7 +1288,7 @@ impl<'de, 'a> de::Deserializer<'de> for EmptyOrNodeDeserializer<'a, '_> {
 
     serde::forward_to_deserialize_any! {
         i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf option seq tuple tuple_struct identifier ignored_any
+        bytes byte_buf seq tuple tuple_struct identifier ignored_any
     }
 }
 
@@ -2827,5 +2831,43 @@ h 8
     fn bare_node_into_scalar_vec_is_empty() {
         let values: Values = from_str("values").unwrap();
         assert_eq!(values, Values { values: vec![] });
+    }
+
+    #[test]
+    fn bare_node_into_newtype_vec_follows_inner() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Name(String);
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Wrap(Item);
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Doc {
+            name: Vec<Name>,
+            item: Vec<Wrap>,
+        }
+        let doc: Doc = from_str("name; item").unwrap();
+        assert_eq!(
+            doc,
+            Doc {
+                name: vec![],
+                item: vec![Wrap(Item::default())]
+            }
+        );
+    }
+
+    #[test]
+    fn bare_node_into_option_vec_follows_inner() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Doc {
+            value: Vec<Option<i32>>,
+            item: Vec<Option<Item>>,
+        }
+        let doc: Doc = from_str("value; item").unwrap();
+        assert_eq!(
+            doc,
+            Doc {
+                value: vec![],
+                item: vec![Some(Item::default())]
+            }
+        );
     }
 }
