@@ -909,26 +909,29 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        let args = self.args();
+        if self.is_empty() {
+            // Empty → empty sequence
+            return visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None));
+        }
 
-        if !args.is_empty() && self.node.children().is_none() {
+        let args = self.args();
+        let props = self.props();
+        let has_children = self.node.children().is_some();
+
+        if !args.is_empty() && props.is_empty() && !has_children {
             // Arguments → either sequence or a single node
-            visitor.visit_seq(ArgSeqAccess::new(
+            return visitor.visit_seq(ArgSeqAccess::new(
                 args.into_iter(),
                 self.input,
                 Some(self.node),
-            ))
-        } else if let Some(children) = self.node.children() {
-            // Children → sequence of nodes
-            visitor.visit_seq(NodeListSeqAccess {
-                iter: children.nodes().iter(),
-                input: self.input,
-                first_node: (children.nodes().len() == 1).then_some(self.node),
-            })
-        } else {
-            // Empty → empty sequence
-            visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
+            ));
         }
+
+        // One node → sequence of that node
+        visitor.visit_seq(OneNodeSeqAccess {
+            node: Some(self.node),
+            input: self.input,
+        })
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(
@@ -1199,6 +1202,25 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
                     first_node: self.first_node,
                 })
             })
+            .transpose()
+    }
+}
+
+struct OneNodeSeqAccess<'a> {
+    node: Option<&'a KdlNode>,
+    input: &'a Arc<String>,
+}
+
+impl<'de, 'a> SeqAccess<'de> for OneNodeSeqAccess<'a> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>, Self::Error> {
+        self.node
+            .take()
+            .map(|node| seed.deserialize(NodeDeserializer::new(node, self.input)))
             .transpose()
     }
 }
