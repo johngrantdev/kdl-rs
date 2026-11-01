@@ -894,8 +894,11 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         if self.is_empty() {
-            // Empty → empty sequence
-            return visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None));
+            // Empty → decided by element type
+            return visitor.visit_seq(EmptyNodeSeqAccess {
+                node: Some(self.node),
+                input: self.input,
+            });
         }
 
         let args = self.args();
@@ -1181,6 +1184,107 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
                 })
             })
             .transpose()
+    }
+}
+
+struct EmptyNodeSeqAccess<'a> {
+    node: Option<&'a KdlNode>,
+    input: &'a Arc<String>,
+}
+
+impl<'de, 'a> SeqAccess<'de> for EmptyNodeSeqAccess<'a> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>, Self::Error> {
+        let Some(node) = self.node.take() else {
+            return Ok(None);
+        };
+        let mut declined = false;
+        let value = seed.deserialize(EmptyOrNodeDeserializer {
+            node,
+            input: self.input,
+            declined: &mut declined,
+        });
+        if declined { Ok(None) } else { value.map(Some) }
+    }
+}
+
+struct EmptyOrNodeDeserializer<'a, 'b> {
+    node: &'a KdlNode,
+    input: &'a Arc<String>,
+    declined: &'b mut bool,
+}
+
+impl<'a> EmptyOrNodeDeserializer<'a, '_> {
+    fn node(self) -> NodeDeserializer<'a> {
+        NodeDeserializer::new(self.node, self.input)
+    }
+
+    fn decline<V>(self) -> Result<V, Error> {
+        *self.declined = true;
+        Err(Error::new("an empty node is not this value"))
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for EmptyOrNodeDeserializer<'a, '_> {
+    type Error = Error;
+
+    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_bool(visitor)
+    }
+
+    fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_unit(visitor)
+    }
+
+    fn deserialize_unit_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_unit_struct(name, visitor)
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_newtype_struct(name, visitor)
+    }
+
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_struct(name, fields, visitor)
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_map(visitor)
+    }
+
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_enum(name, variants, visitor)
+    }
+
+    fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Self::Error> {
+        self.decline()
+    }
+
+    serde::forward_to_deserialize_any! {
+        i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option seq tuple tuple_struct identifier ignored_any
     }
 }
 
@@ -2653,5 +2757,75 @@ h 8
                 b"nope",
             );
         }
+    }
+
+    #[derive(Deserialize, Debug, Default, PartialEq)]
+    #[serde(default)]
+    struct Item {
+        flag: bool,
+        name: Option<String>,
+        tags: Vec<String>,
+    }
+
+    #[derive(Deserialize, Debug, Default, PartialEq)]
+    #[serde(default)]
+    struct Doc {
+        item: Vec<Item>,
+    }
+
+    #[test]
+    fn bare_node_into_struct_vec() {
+        let doc: Doc = from_str("item").unwrap();
+        assert_eq!(
+            doc,
+            Doc {
+                item: vec![Item::default()]
+            }
+        );
+    }
+
+    #[test]
+    fn bare_node_under_parent() {
+        #[derive(Deserialize, Debug, Default, PartialEq)]
+        #[serde(default)]
+        struct Outer {
+            item: Vec<Item>,
+        }
+        #[derive(Deserialize, Debug, Default, PartialEq)]
+        #[serde(default)]
+        struct Config {
+            outer: Outer,
+        }
+        let config: Config = from_str("outer { item }").unwrap();
+        assert_eq!(
+            config,
+            Config {
+                outer: Outer {
+                    item: vec![Item::default()]
+                }
+            }
+        );
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Flags {
+        item: Vec<bool>,
+    }
+
+    #[test]
+    fn bare_node_into_bool_vec() {
+        let flags: Flags = from_str("item").unwrap();
+        assert_eq!(flags, Flags { item: vec![true] });
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Values {
+        values: Vec<i32>,
+    }
+
+    #[test]
+    fn bare_node_into_scalar_vec_is_empty() {
+        let values: Values = from_str("values").unwrap();
+        assert_eq!(values, Values { values: vec![] });
     }
 }
