@@ -893,19 +893,19 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        // A sequence was requested, but we only have a single node. We have to decide whether to
+        // yield the arguments as the sequence, or to yield the node itself as a one-element sequence.
         if self.is_empty() {
-            // Empty → decided by element type
+            // Empty node → decided by element type
             return visitor.visit_seq(EmptyNodeSeqAccess {
                 node: Some(self.node),
                 input: self.input,
             });
         }
-
-        // A sequence was requested, but we only have a single node. We have to decide whether to
-        // yield the arguments as the sequence, or to yield the node itself as a one-element sequence.
         let args = self.args();
         if args.is_empty() {
-            // Properties or Children → sequence
+            // We already checked for an empty nodes above, so there must be either properties or
+            // children. We yield the node itself as a one-element sequence.
             visitor.visit_seq(NodeListSeqAccess {
                 iter: std::slice::from_ref(self.node).iter(),
                 input: self.input,
@@ -1213,11 +1213,7 @@ impl<'de, 'a> SeqAccess<'de> for EmptyNodeSeqAccess<'a> {
             input: self.input,
             declined: &mut declined,
         });
-        if declined {
-            Ok(None)
-        } else {
-            value.map(Some)
-        }
+        if declined { Ok(None) } else { value.map(Some) }
     }
 }
 
