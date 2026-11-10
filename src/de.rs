@@ -893,22 +893,23 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        if self.is_empty() {
+            // Empty → decided by element type
+            return visitor.visit_seq(EmptyNodeSeqAccess {
+                node: Some(self.node),
+                input: self.input,
+            });
+        }
+
         // A sequence was requested, but we only have a single node. We have to decide whether to
         // yield the arguments as the sequence, or to yield the node itself as a one-element sequence.
         let args = self.args();
         if args.is_empty() {
-            // If the node has no arguments, we have to make some guesses about what was intended.
-            if self.node.children().is_some() || !self.props().is_empty() {
-                // If the node has children or has props, we're guessing that it's the node itself
-                // that is the sequence element.
-                visitor.visit_seq(NodeListSeqAccess {
-                    iter: std::slice::from_ref(self.node).iter(),
-                    input: self.input,
-                })
-            } else {
-                // If the node has nothing, we just decide here to treat it as an empty sequence.
-                visitor.visit_seq(ArgSeqAccess::new(Vec::new().into_iter(), self.input, None))
-            }
+            // Properties or Children → sequence
+            visitor.visit_seq(NodeListSeqAccess {
+                iter: std::slice::from_ref(self.node).iter(),
+                input: self.input,
+            })
         } else {
             // If the node has arguments, we wait until we know more about the type of the
             // sequence elements, before we make the decision.
@@ -1188,6 +1189,102 @@ impl<'de, 'a> SeqAccess<'de> for NodeListSeqAccess<'a> {
                 })
             })
             .transpose()
+    }
+}
+
+struct EmptyNodeSeqAccess<'a> {
+    node: Option<&'a KdlNode>,
+    input: &'a Arc<String>,
+}
+
+impl<'de, 'a> SeqAccess<'de> for EmptyNodeSeqAccess<'a> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>, Self::Error> {
+        let Some(node) = self.node.take() else {
+            return Ok(None);
+        };
+        let mut declined = false;
+        let value = seed.deserialize(EmptyOrNodeDeserializer {
+            node,
+            input: self.input,
+            declined: &mut declined,
+        });
+        if declined {
+            Ok(None)
+        } else {
+            value.map(Some)
+        }
+    }
+}
+
+struct EmptyOrNodeDeserializer<'a, 'b> {
+    node: &'a KdlNode,
+    input: &'a Arc<String>,
+    declined: &'b mut bool,
+}
+
+impl<'a> EmptyOrNodeDeserializer<'a, '_> {
+    fn node(self) -> NodeDeserializer<'a> {
+        NodeDeserializer::new(self.node, self.input)
+    }
+
+    fn decline<V>(self) -> Result<V, Error> {
+        *self.declined = true;
+        Err(Error::new("an empty node is not this value"))
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for EmptyOrNodeDeserializer<'a, '_> {
+    type Error = Error;
+
+    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_bool(visitor)
+    }
+
+    fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_unit(visitor)
+    }
+
+    fn deserialize_unit_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_unit_struct(name, visitor)
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        visitor.visit_newtype_struct(self)
+    }
+
+    fn deserialize_struct<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_struct(name, fields, visitor)
+    }
+
+    fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.node().deserialize_map(visitor)
+    }
+
+    fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Self::Error> {
+        self.decline()
+    }
+
+    serde::forward_to_deserialize_any! {
+        i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option seq tuple tuple_struct enum identifier ignored_any
     }
 }
 
@@ -3042,5 +3139,109 @@ h 8
                 b"nope",
             );
         }
+    }
+
+    #[derive(Deserialize, Debug, Default, PartialEq)]
+    #[serde(default)]
+    struct BareItem {
+        flag: bool,
+        name: Option<String>,
+        tags: Vec<String>,
+    }
+
+    #[derive(Deserialize, Debug, Default, PartialEq)]
+    #[serde(default)]
+    struct BareDoc {
+        item: Vec<BareItem>,
+    }
+
+    #[test]
+    fn bare_node_into_struct_vec() {
+        let doc: BareDoc = from_str("item").unwrap();
+        assert_eq!(
+            doc,
+            BareDoc {
+                item: vec![BareItem::default()]
+            }
+        );
+    }
+
+    #[test]
+    fn two_bare_nodes_into_struct_vec() {
+        let doc: BareDoc = from_str("item\nitem").unwrap();
+        assert_eq!(
+            doc,
+            BareDoc {
+                item: vec![BareItem::default(), BareItem::default()]
+            }
+        );
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct BareFlags {
+        item: Vec<bool>,
+    }
+
+    #[test]
+    fn bare_node_into_bool_vec() {
+        let flags: BareFlags = from_str("item").unwrap();
+        assert_eq!(flags, BareFlags { item: vec![true] });
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct BareUnits {
+        item: Vec<()>,
+    }
+
+    #[test]
+    fn bare_node_into_unit_vec() {
+        let units: BareUnits = from_str("item").unwrap();
+        assert_eq!(units, BareUnits { item: vec![()] });
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct BareValues {
+        values: Vec<i32>,
+    }
+
+    #[test]
+    fn bare_node_into_scalar_vec_is_empty() {
+        let values: BareValues = from_str("values").unwrap();
+        assert_eq!(values, BareValues { values: vec![] });
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct BarePort(#[allow(dead_code)] u16);
+
+    #[derive(Deserialize, Debug)]
+    struct BarePorts {
+        #[allow(dead_code)]
+        port: Vec<BarePort>,
+    }
+
+    #[test]
+    fn bare_node_into_newtype_vec_is_empty() {
+        let ports: BarePorts = from_str("port").unwrap();
+        assert!(ports.port.is_empty());
+    }
+
+    #[derive(Deserialize, Debug)]
+    enum BareColor {
+        #[allow(dead_code)]
+        Red,
+        #[allow(dead_code)]
+        Green,
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct BareColors {
+        #[allow(dead_code)]
+        color: Vec<BareColor>,
+    }
+
+    #[test]
+    fn bare_node_into_enum_vec_is_empty() {
+        let colors: BareColors = from_str("color").unwrap();
+        assert!(colors.color.is_empty());
     }
 }
