@@ -1802,6 +1802,21 @@ mod tests {
     }
 
     #[test]
+    fn false_bool_roundtrip() {
+        use serde::Deserialize;
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq)]
+        struct Config {
+            #[serde(default)]
+            active: bool,
+        }
+
+        let kdl = to_string(&Config { active: false }).unwrap();
+        let config: Config = crate::de::from_str(&kdl).unwrap();
+        assert_eq!(config, Config { active: false });
+    }
+
+    #[test]
     fn option_some() {
         #[derive(Serialize)]
         struct Config {

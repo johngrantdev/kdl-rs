@@ -1719,6 +1719,62 @@ server {
     }
 
     #[test]
+    fn omitted_bool_without_default_is_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            host: String,
+            active: bool,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = r#"
+server {
+    host "localhost"
+}
+"#;
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(err.to_string(), "missing field `active`");
+    }
+
+    #[test]
+    fn omitted_vec_without_default_is_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            routes: Vec<String>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = "server { }";
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(err.to_string(), "missing field `routes`");
+    }
+
+    #[test]
+    fn omitted_option_is_none() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            port: Option<u16>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = "server { }";
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(config.server.port, None);
+    }
+
+    #[test]
     fn node_with_properties() {
         #[derive(Deserialize, Debug, PartialEq)]
         struct Config {
@@ -2461,6 +2517,72 @@ server {
         assert_eq!(
             err.to_string(),
             "`name` has no arguments, expected a scalar value"
+        );
+    }
+
+    #[test]
+    fn bare_child_option_is_none() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            port: Option<u16>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = "server { port }";
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(config.server.port, None);
+    }
+
+    #[test]
+    fn bare_child_vec_is_empty() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            routes: Vec<String>,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = "server { routes }";
+        let config: Config = from_str(kdl).unwrap();
+        assert!(config.server.routes.is_empty());
+    }
+
+    #[test]
+    fn bare_child_struct_uses_defaults() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Nested {
+            #[serde(default)]
+            value: String,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            nested: Nested,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = "server { nested }";
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Config {
+                server: Server {
+                    nested: Nested {
+                        value: String::new(),
+                    },
+                },
+            }
         );
     }
 
