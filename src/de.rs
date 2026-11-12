@@ -1028,6 +1028,17 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
 
 impl<'a> NodeDeserializer<'a> {
     fn deserialize_scalar<'de, V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        if self.is_empty() {
+            return Err(Error::new(format!(
+                "`{}` has no arguments, expected a scalar value",
+                self.node.name().value()
+            ))
+            .with_span(
+                self.input,
+                node_span(self.node),
+                "while deserializing this KDL node",
+            ));
+        }
         if self.is_scalar() {
             ValueDeserializer::new(self.args()[0], self.input).deserialize_any(visitor)
         } else {
@@ -2396,6 +2407,60 @@ h 8
                     active: false,
                 },
             }
+        );
+    }
+
+    #[test]
+    fn bare_child_scalar_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            port: u16,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = r#"
+server {
+    port
+}
+"#;
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`port` has no arguments, expected a scalar value"
+        );
+        assert!(err.span().is_some());
+        #[cfg(feature = "span")]
+        {
+            let span = err.span().unwrap();
+            assert_eq!(kdl.read_span(&span, 0, 0).unwrap().data(), b"port");
+        }
+    }
+
+    #[test]
+    fn bare_child_string_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            name: String,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = r#"
+server {
+    name
+}
+"#;
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`name` has no arguments, expected a scalar value"
         );
     }
 
