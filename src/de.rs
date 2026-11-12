@@ -1028,7 +1028,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDeserializer<'a> {
 
 impl<'a> NodeDeserializer<'a> {
     fn deserialize_scalar<'de, V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        if self.is_empty() {
+        if self.args().is_empty() {
             return Err(Error::new(format!(
                 "`{}` has no arguments, expected a scalar value",
                 self.node.name().value()
@@ -2493,6 +2493,78 @@ server {
         {
             let span = err.span().unwrap();
             assert_eq!(kdl.read_span(&span, 0, 0).unwrap().data(), b"port");
+        }
+    }
+
+    #[test]
+    fn bare_child_empty_block_scalar_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            port: u16,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = r#"
+server {
+    port {}
+}
+"#;
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`port` has no arguments, expected a scalar value"
+        );
+        assert!(err.span().is_some());
+        #[cfg(feature = "span")]
+        {
+            let span = err.span().unwrap();
+            assert!(
+                kdl.read_span(&span, 0, 0)
+                    .unwrap()
+                    .data()
+                    .starts_with(b"port")
+            );
+        }
+    }
+
+    #[test]
+    fn bare_child_populated_block_scalar_error() {
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            port: u16,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        let kdl = r#"
+server {
+    port {
+        child "x"
+    }
+}
+"#;
+        let err = from_str::<Config>(kdl).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "`port` has no arguments, expected a scalar value"
+        );
+        assert!(err.span().is_some());
+        #[cfg(feature = "span")]
+        {
+            let span = err.span().unwrap();
+            assert!(
+                kdl.read_span(&span, 0, 0)
+                    .unwrap()
+                    .data()
+                    .starts_with(b"port")
+            );
         }
     }
 
