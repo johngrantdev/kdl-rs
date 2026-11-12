@@ -1263,7 +1263,6 @@ enum NodeMapValue<'a> {
     Args(Vec<&'a KdlEntry>),
     SingleNode(&'a KdlNode),
     MultiNode(Vec<&'a KdlNode>),
-    Omitted,
 }
 
 impl<'a> NodeMapAccess<'a> {
@@ -1318,7 +1317,6 @@ impl<'a> NodeMapAccess<'a> {
             }
         }
 
-        let mut used_names = Vec::new();
         for prop in node.entries().iter().filter(|e| e.name().is_some()) {
             // SAFETY: we just filtered for things with names.
             let name = prop.name().unwrap().value();
@@ -1335,7 +1333,6 @@ impl<'a> NodeMapAccess<'a> {
                 }
             }
             entries.push((name.into(), NodeMapValue::Arg(prop)));
-            used_names.push(name);
         }
 
         // Add children (grouped by node name)
@@ -1345,7 +1342,6 @@ impl<'a> NodeMapAccess<'a> {
                 std::collections::HashMap::new();
             for child in children.nodes() {
                 let name = child.name().value();
-                used_names.push(name);
                 if !child_groups.contains_key(name) {
                     child_keys.push(name);
                 }
@@ -1360,14 +1356,6 @@ impl<'a> NodeMapAccess<'a> {
                 }
             }
         }
-        if let Some(fields) = fields {
-            for field in fields {
-                if !field.starts_with('#') && !used_names.contains(field) {
-                    entries.push((String::from(*field).into(), NodeMapValue::Omitted));
-                }
-            }
-        }
-
         NodeMapAccess {
             entries,
             idx: 0,
@@ -1415,7 +1403,6 @@ impl<'de, 'a> MapAccess<'de> for NodeMapAccess<'a> {
                 nodes,
                 input: self.input,
             }),
-            NodeMapValue::Omitted => seed.deserialize(OmittedChildDeserializer),
         }
     }
 }
@@ -1463,48 +1450,6 @@ impl<'de, 'a> Deserializer<'de> for ArgsSeqDeserializer<'a> {
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
         bytes byte_buf unit unit_struct tuple
-        tuple_struct map struct enum identifier ignored_any
-    }
-}
-
-struct OmittedChildDeserializer;
-
-impl<'de> Deserializer<'de> for OmittedChildDeserializer {
-    type Error = Error;
-
-    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        visitor.visit_bool(false)
-    }
-
-    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        visitor.visit_bool(false)
-    }
-
-    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        visitor.visit_none()
-    }
-
-    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        // empty sequence
-        visitor.visit_seq(ArgSeqAccess::new(
-            Vec::new().into_iter(),
-            &Arc::new(String::new()),
-            None,
-        ))
-    }
-
-    serde::forward_to_deserialize_any! {
-        i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct tuple newtype_struct
         tuple_struct map struct enum identifier ignored_any
     }
 }
@@ -1713,6 +1658,41 @@ port 8080
 server {
     host "localhost"
     port 8080
+}
+"#;
+        let config: Config = from_str(kdl).unwrap();
+        assert_eq!(
+            config,
+            Config {
+                server: Server {
+                    host: "localhost".into(),
+                    port: 8080,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn nested_default_value() {
+        fn default_port() -> u16 {
+            8080
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Config {
+            server: Server,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Server {
+            host: String,
+            #[serde(default = "default_port")]
+            port: u16,
+        }
+
+        let kdl = r#"
+server {
+    host "localhost"
 }
 "#;
         let config: Config = from_str(kdl).unwrap();
@@ -2068,6 +2048,7 @@ item x y
 
         #[derive(Deserialize, Debug, PartialEq)]
         struct Routes {
+            #[serde(default)]
             path: Vec<String>,
         }
 
@@ -2360,6 +2341,7 @@ h 8
         #[serde(rename_all = "kebab-case")]
         struct Server {
             host: String,
+            #[serde(default)]
             active: bool,
         }
 
@@ -2428,6 +2410,7 @@ h 8
         struct Item {
             #[serde(rename = "#0")]
             name: String,
+            #[serde(default)]
             #[serde(rename = "child")]
             children: Vec<String>,
         }
